@@ -1,17 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
 import { apiBase } from '../lib/api'
-import { usePlayer } from '../player/PlayerContext'
-import type { TrackRef } from '../types'
 
 type Job = { id: string; title: string; ready: boolean }
 
-function audioUrl(id: string, download = false) {
-  const base = `${apiBase()}/api/audio/${id}`
-  return download ? `${base}?download=1` : base
+function downloadUrl(id: string) {
+  return `${apiBase()}/api/audio/${id}?download=1`
 }
 
 export default function Audiobooks() {
-  const { actions } = usePlayer()
   const [caps, setCaps] = useState<{ ffmpeg: boolean; yt_dlp: boolean; writable: boolean } | null>(null)
   const [jobs, setJobs] = useState<Job[]>([])
   const [status, setStatus] = useState<string | null>(null)
@@ -89,17 +85,6 @@ export default function Audiobooks() {
     }
   }
 
-  function playJob(job: Job) {
-    if (!job.ready) return
-    const track: TrackRef = {
-      kind: 'job',
-      id: job.id,
-      title: job.title,
-      audioUrl: audioUrl(job.id),
-      artist: 'Audiobook import',
-    }
-    actions.playSingle(track)
-  }
 
   return (
     <div className="space-y-6 pb-10">
@@ -190,26 +175,18 @@ export default function Audiobooks() {
                 <p className="truncate font-medium text-ink">{job.title}</p>
                 <p className="truncate font-mono text-xs text-plum/50">{job.id}</p>
               </div>
-              <div className="flex shrink-0 gap-2">
-                <button
-                  type="button"
-                  disabled={!job.ready}
-                  onClick={() => playJob(job)}
-                  className="rounded-xl bg-plum px-4 py-2 text-sm font-semibold text-white transition enabled:hover:bg-plum/90 disabled:opacity-40"
+              {job.ready ? (
+                <a
+                  href={downloadUrl(job.id)}
+                  download
+                  className="shrink-0 flex items-center justify-center rounded-xl border border-sand bg-paper px-4 py-2 text-sm font-semibold text-ink transition hover:bg-mist shadow-sm"
+                  title="Download as M4A"
                 >
-                  {job.ready ? 'Play' : '…'}
-                </button>
-                {job.ready && (
-                  <a
-                    href={audioUrl(job.id, true)}
-                    download
-                    className="flex items-center justify-center rounded-xl border border-sand bg-paper px-4 py-2 text-sm font-semibold text-ink transition hover:bg-mist shadow-sm"
-                    title="Download as M4A"
-                  >
-                    Download
-                  </a>
-                )}
-              </div>
+                  ⬇ Download
+                </a>
+              ) : (
+                <span className="shrink-0 rounded-xl border border-sand px-4 py-2 text-sm text-plum/40">Processing…</span>
+              )}
             </li>
           ))}
         </ul>
