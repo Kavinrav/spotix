@@ -2,8 +2,6 @@ import { useState } from 'react'
 import Sidebar, { type RouteKey } from './components/Sidebar'
 import Player from './components/Player'
 import { PlayerProvider } from './player/PlayerContext'
-import Home from './pages/Home'
-import Search from './pages/Search'
 import Library from './pages/Library'
 import Playlists from './pages/Playlists'
 import Audiobooks from './pages/Audiobooks'
@@ -14,14 +12,10 @@ export default function App() {
     return <SpotifyCallback />
   }
 
-  const [route, setRoute] = useState<RouteKey>('home')
+  const [route, setRoute] = useState<RouteKey>('library')
 
   const Page = (() => {
     switch (route) {
-      case 'home':
-        return <Home />
-      case 'search':
-        return <Search />
       case 'library':
         return <Library />
       case 'playlists':
@@ -29,7 +23,7 @@ export default function App() {
       case 'audiobooks':
         return <Audiobooks />
       default:
-        return <Home />
+        return <Library />
     }
   })()
 
@@ -50,7 +44,7 @@ export default function App() {
           </div>
 
           <div className="mx-auto flex max-w-6xl gap-2 px-4 pb-4 sm:hidden">
-            {(['home', 'search', 'library', 'playlists', 'audiobooks'] as RouteKey[]).map((k) => (
+            {(['library', 'playlists', 'audiobooks'] as RouteKey[]).map((k) => (
               <button
                 key={k}
                 type="button"

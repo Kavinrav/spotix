@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 
-export type RouteKey = 'home' | 'search' | 'library' | 'playlists' | 'audiobooks'
+export type RouteKey = 'library' | 'playlists' | 'audiobooks'
 
 type NavItem = {
   key: RouteKey
@@ -8,8 +8,6 @@ type NavItem = {
 }
 
 const items: NavItem[] = [
-  { key: 'home', label: 'Home' },
-  { key: 'search', label: 'Search' },
   { key: 'library', label: 'Library' },
   { key: 'playlists', label: 'Playlists' },
   { key: 'audiobooks', label: 'Audiobooks' },
