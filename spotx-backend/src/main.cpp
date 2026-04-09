@@ -385,22 +385,17 @@ int main(int argc, char** argv) {
     }
   });
 
-  svr.Post("/api/convert", [jobs_dir, have_ffmpeg](const httplib::Request& req, httplib::Response& res) {
+  svr.Post("/api/convert", [jobs_dir, have_ffmpeg](const httplib::Request& req, httplib::Response& res, const httplib::ContentReader& content_reader) {
     std::error_code ec;
     if (!have_ffmpeg) {
       res.status = 503;
       res.set_content("{\"error\":\"ffmpeg not found on PATH\"}", "application/json");
       return;
     }
-    if (!req.has_file("file")) {
+
+    if (!req.is_multipart_form_data()) {
       res.status = 400;
-      res.set_content("{\"error\":\"expected multipart field 'file'\"}", "application/json");
-      return;
-    }
-    const auto& f = req.get_file_value("file");
-    if (f.content.empty()) {
-      res.status = 400;
-      res.set_content("{\"error\":\"empty file\"}", "application/json");
+      res.set_content("{\"error\":\"expected multipart/form-data\"}", "application/json");
       return;
     }
 
@@ -408,13 +403,38 @@ int main(int argc, char** argv) {
     const fs::path job_dir = jobs_dir / id;
     fs::create_directories(job_dir, ec);
 
-    std::string base = f.filename;
-    if (base.empty()) base = "upload.bin";
-    const fs::path input_path = job_dir / ("in_" + base);
+    std::string base = "upload.bin";
+    fs::path input_path = job_dir / ("in_" + base);
+    std::ofstream ofs;
+    bool saving_file = false;
 
-    {
-      std::ofstream ofs(input_path, std::ios::binary);
-      ofs.write(f.content.data(), static_cast<std::streamsize>(f.content.size()));
+    bool read_ok = content_reader(
+      [&](const httplib::MultipartFormData &file) {
+        if (file.name == "file") {
+          if (!file.filename.empty()) base = file.filename;
+          input_path = job_dir / ("in_" + base);
+          ofs.open(input_path, std::ios::binary);
+          saving_file = true;
+          return true;
+        }
+        saving_file = false;
+        return true;
+      },
+      [&](const char *data, size_t data_length) {
+        if (saving_file && ofs.is_open()) {
+          ofs.write(data, static_cast<std::streamsize>(data_length));
+        }
+        return true;
+      }
+    );
+
+    if (ofs.is_open()) ofs.close();
+
+    if (!read_ok || !fs::exists(input_path) || fs::file_size(input_path) == 0) {
+      fs::remove_all(job_dir, ec);
+      res.status = 400;
+      res.set_content("{\"error\":\"upload failed or empty file\"}", "application/json");
+      return;
     }
 
     const fs::path output_path = job_dir / "output.m4a";
