@@ -5,8 +5,9 @@ import type { TrackRef } from '../types'
 
 type Job = { id: string; title: string; ready: boolean }
 
-function audioUrl(id: string) {
-  return `${apiBase()}/api/audio/${id}`
+function audioUrl(id: string, download = false) {
+  const base = `${apiBase()}/api/audio/${id}`
+  return download ? `${base}?download=1` : base
 }
 
 export default function Audiobooks() {
@@ -189,14 +190,26 @@ export default function Audiobooks() {
                 <p className="truncate font-medium text-ink">{job.title}</p>
                 <p className="truncate font-mono text-xs text-plum/50">{job.id}</p>
               </div>
-              <button
-                type="button"
-                disabled={!job.ready}
-                onClick={() => playJob(job)}
-                className="shrink-0 rounded-xl bg-plum px-4 py-2 text-sm font-semibold text-white transition enabled:hover:bg-plum/90 disabled:opacity-40"
-              >
-                {job.ready ? 'Play' : '…'}
-              </button>
+              <div className="flex shrink-0 gap-2">
+                <button
+                  type="button"
+                  disabled={!job.ready}
+                  onClick={() => playJob(job)}
+                  className="rounded-xl bg-plum px-4 py-2 text-sm font-semibold text-white transition enabled:hover:bg-plum/90 disabled:opacity-40"
+                >
+                  {job.ready ? 'Play' : '…'}
+                </button>
+                {job.ready && (
+                  <a
+                    href={audioUrl(job.id, true)}
+                    download
+                    className="flex items-center justify-center rounded-xl border border-sand bg-paper px-4 py-2 text-sm font-semibold text-ink transition hover:bg-mist shadow-sm"
+                    title="Download as M4A"
+                  >
+                    Download
+                  </a>
+                )}
+              </div>
             </li>
           ))}
         </ul>

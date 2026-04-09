@@ -293,11 +293,21 @@ int main(int argc, char** argv) {
       return;
     }
     try {
-      const fs::path file = jobs_dir / id / "output.m4a";
+      const fs::path job_dir = jobs_dir / id;
+      const fs::path file = job_dir / "output.m4a";
       if (!fs::exists(file)) {
         res.status = 404;
         res.set_content("{\"error\":\"not found\"}", "application/json");
         return;
+      }
+
+      // Check if user wants a download instead of stream
+      if (req.has_param("download")) {
+        std::string title;
+        if (!read_meta_title(job_dir, title)) {
+          title = id;
+        }
+        res.set_header("Content-Disposition", "attachment; filename=\"" + json_escape(title) + ".m4a\"");
       }
 
       const auto size = fs::file_size(file);
