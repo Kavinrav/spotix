@@ -4,7 +4,7 @@
 
 @layer base {
   html {
-    @apply antialiased text-ink bg-paper;
+    @apply antialiased text-white bg-black;
   }
 }
 

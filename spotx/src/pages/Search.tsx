@@ -106,7 +106,7 @@ export default function Search() {
           <div>
             <h2 className="font-display text-xl font-semibold text-ink">Search</h2>
             <p className="mt-2 text-sm text-plum/85">
-              Real Spotify search results. Like/unlike and add to playlists are enabled. Playback opens the track in Spotify.
+              Search results. Like/unlike and add to playlists are enabled. Playback opens the track in Spotify.
             </p>
           </div>
 
