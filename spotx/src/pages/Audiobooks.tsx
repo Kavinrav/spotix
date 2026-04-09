@@ -11,7 +11,7 @@ function audioUrl(id: string) {
 
 export default function Audiobooks() {
   const { actions } = usePlayer()
-  const [caps, setCaps] = useState<{ ffmpeg: boolean; yt_dlp: boolean } | null>(null)
+  const [caps, setCaps] = useState<{ ffmpeg: boolean; yt_dlp: boolean; writable: boolean } | null>(null)
   const [jobs, setJobs] = useState<Job[]>([])
   const [status, setStatus] = useState<string | null>(null)
   const [urlInput, setUrlInput] = useState('')
@@ -20,13 +20,20 @@ export default function Audiobooks() {
   const refresh = useCallback(async () => {
     try {
       const [c, j] = await Promise.all([
-        fetch(`${apiBase()}/api/capabilities`).then((r) => r.json()),
-        fetch(`${apiBase()}/api/jobs`).then((r) => r.json()),
+        fetch(`${apiBase()}/api/capabilities`).then((r) => {
+          if (!r.ok) throw new Error(`Capabilities failed: ${r.status}`)
+          return r.json()
+        }),
+        fetch(`${apiBase()}/api/jobs`).then((r) => {
+          if (!r.ok) throw new Error(`Jobs failed: ${r.status}`)
+          return r.json()
+        }),
       ])
       setCaps(c)
       setJobs(j as Job[])
-    } catch {
-      setStatus('Cannot reach SpotX backend (start spotx-server on port 8787).')
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      setStatus(`Cannot reach SpotX backend: ${msg} (Check if server is running on port 8787)`)
     }
   }, [])
 
@@ -118,7 +125,27 @@ export default function Audiobooks() {
 
       <section className="rounded-[2rem] border border-sand bg-white/70 p-6 shadow-soft sm:p-8">
         <h2 className="font-display text-lg font-semibold text-ink">Import from a link</h2>
-        <p className="mt-2 text-sm text-plum/85">
+        <div className="mt-4 flex flex-wrap gap-2">
+          {caps ? (
+            <>
+              <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${caps.ffmpeg ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                ffmpeg: {caps.ffmpeg ? 'Ready' : 'Missing'}
+              </span>
+              <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${caps.yt_dlp ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                yt-dlp: {caps.yt_dlp ? 'Ready' : 'Not Found'}
+              </span>
+              <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${caps.writable ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                Storage: {caps.writable ? 'Writable' : 'Read-only'}
+              </span>
+            </>
+          ) : (
+            <span className="inline-flex items-center rounded-full bg-mist px-2.5 py-0.5 text-xs font-medium text-plum/60 animate-pulse">
+              Checking server capabilities...
+            </span>
+          )}
+        </div>
+
+        <p className="mt-4 text-sm text-plum/85">
           Paste a page URL from supported sites. Requires <code className="rounded bg-mist px-1">yt-dlp</code> on the server PATH
           alongside ffmpeg. Respect copyright and site terms.
         </p>
@@ -176,9 +203,12 @@ export default function Audiobooks() {
       </section>
 
       {status && (
-        <p className="rounded-xl border border-sand bg-mist/50 px-4 py-3 text-sm text-ink" role="status">
-          {status}
-        </p>
+        <div className={`rounded-xl border px-4 py-3 text-sm shadow-soft ${status.includes('failed') || status.includes('Error') || status.includes('Missing') || status.includes('Cannot') ? 'border-red-200 bg-red-50 text-red-900' : 'border-sand bg-mist/50 text-ink'}`} role="status">
+          <p className="font-semibold">{status.includes('failed') || status.includes('Error') ? 'Error' : 'Status'}</p>
+          <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap font-mono text-xs opacity-80">
+            {status}
+          </pre>
+        </div>
       )}
     </div>
   )

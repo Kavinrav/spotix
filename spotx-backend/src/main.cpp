@@ -1,6 +1,4 @@
-// SpotX backend: converts video/audio to M4A (AAC) for audiobook-style playback.
-// Requires ffmpeg on PATH. Optional: yt-dlp for URL sources (YouTube and many sites).
-
+#define CPPHTTPLIB_THREAD_POOL_COUNT 8
 #include <httplib.h>
 
 #include <algorithm>
@@ -11,7 +9,10 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <mutex>
 #include <random>
+#include <cstdio>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -23,6 +24,12 @@
 namespace fs = std::filesystem;
 
 namespace {
+
+std::mutex g_log_mtx;
+void log(const std::string& msg) {
+  std::lock_guard<std::mutex> lock(g_log_mtx);
+  std::cout << msg << std::endl;
+}
 
 constexpr const char* kMimeM4a = "audio/mp4";
 
@@ -86,11 +93,37 @@ bool run_process(const std::string& cmd) {
 #endif
 }
 
-bool ffmpeg_to_m4a(const fs::path& input, const fs::path& output) {
+bool run_process_capture(const std::string& cmd, std::string& output) {
+  char buffer[128];
+  output.clear();
+  std::string full_cmd = cmd + " 2>&1";
+#ifdef _WIN32
+  FILE* pipe = _popen(full_cmd.c_str(), "r");
+#else
+  FILE* pipe = popen(full_cmd.c_str(), "r");
+#endif
+  if (!pipe) return false;
+  while (fgets(buffer, sizeof(buffer), pipe) != NULL) {
+    output += buffer;
+  }
+#ifdef _WIN32
+  int r = _pclose(pipe);
+  return r == 0;
+#else
+  int r = pclose(pipe);
+  return WIFEXITED(r) && WEXITSTATUS(r) == 0;
+#endif
+}
+
+bool ffmpeg_to_m4a(const fs::path& input, const fs::path& output, std::string& err) {
   std::ostringstream cmd;
   cmd << "ffmpeg -y -hide_banner -loglevel error -i " << quote_shell(input) << " -vn -c:a aac -b:a 192k -movflags +faststart "
       << quote_shell(output);
-  return run_process(cmd.str());
+  if (!run_process_capture(cmd.str(), err)) {
+    if (err.empty()) err = "ffmpeg failed with no output";
+    return false;
+  }
+  return true;
 }
 
 bool ffmpeg_available() {
@@ -122,8 +155,8 @@ bool ytdlp_download(const fs::path& job_dir, const std::string& url, std::string
   const fs::path pattern = job_dir / "raw.%(ext)s";
   std::ostringstream cmd;
   cmd << "yt-dlp -f bestaudio/best --no-playlist -o " << quote_shell(pattern) << " " << quote_string(url);
-  if (!run_process(cmd.str())) {
-    err = "yt-dlp failed (install yt-dlp and ensure the URL is supported)";
+  if (!run_process_capture(cmd.str(), err)) {
+    if (err.empty()) err = "yt-dlp failed (install yt-dlp and ensure the URL is supported)";
     return false;
   }
   return true;
@@ -195,20 +228,36 @@ int main(int argc, char** argv) {
     return httplib::Server::HandlerResponse::Unhandled;
   });
 
-  svr.Get("/health", [have_ffmpeg, have_ytdlp](const httplib::Request&, httplib::Response& res) {
+  svr.Get("/health", [have_ffmpeg, have_ytdlp, jobs_dir](const httplib::Request&, httplib::Response& res) {
+    bool writable = false;
+    try {
+      const fs::path test_file = jobs_dir / (".write_test_" + gen_id());
+      std::ofstream f(test_file);
+      if (f) {
+        f << "ok";
+        f.close();
+        fs::remove(test_file);
+        writable = true;
+      }
+    } catch (...) {}
+
     std::ostringstream j;
-    j << "{\"ok\":true,\"ffmpeg\":" << (have_ffmpeg ? "true" : "false") << ",\"yt_dlp\":" << (have_ytdlp ? "true" : "false") << "}";
+    j << "{\"ok\":true,\"ffmpeg\":" << (have_ffmpeg ? "true" : "false") 
+      << ",\"yt_dlp\":" << (have_ytdlp ? "true" : "false") 
+      << ",\"writable\":" << (writable ? "true" : "false") << "}";
     res.set_content(j.str(), "application/json");
   });
 
   svr.Get("/api/capabilities", [have_ffmpeg, have_ytdlp](const httplib::Request&, httplib::Response& res) {
     std::ostringstream j;
-    j << "{\"ffmpeg\":" << (have_ffmpeg ? "true" : "false") << ",\"yt_dlp\":" << (have_ytdlp ? "true" : "false") << "}";
+    j << "{\"ffmpeg\":" << (have_ffmpeg ? "true" : "false") 
+      << ",\"yt_dlp\":" << (have_ytdlp ? "true" : "false")
+      << ",\"writable\":true}"; 
     res.set_content(j.str(), "application/json");
   });
 
-  svr.Get("/api/jobs", [&jobs_dir](const httplib::Request&, httplib::Response& res) {
-    std::cout << "GET /api/jobs\n";
+  svr.Get("/api/jobs", [jobs_dir](const httplib::Request&, httplib::Response& res) {
+    log("GET /api/jobs");
     std::ostringstream j;
     j << "[";
     bool first = true;
@@ -233,36 +282,27 @@ int main(int argc, char** argv) {
     res.set_content(j.str(), "application/json");
   });
 
-  svr.Get(R"(/api/audio/([a-fA-F0-9]{32}))", [&jobs_dir, have_ffmpeg](const httplib::Request& req, httplib::Response& res) {
+  svr.Get(R"(/api/audio/([a-fA-F0-9]{32}))", [jobs_dir, have_ffmpeg](const httplib::Request& req, httplib::Response& res) {
     const std::string id = req.matches[1];
-    std::cout << "GET /api/audio/" << id << "\n";
-    std::cout << "  Requested ID: " << id << std::endl;
+    log("GET /api/audio/" + id);
     
     if (!have_ffmpeg) {
-      std::cerr << "  ffmpeg not available\n";
+      log("  ffmpeg not available");
       res.status = 503;
       res.set_content("{\"error\":\"ffmpeg not available\"}", "application/json");
       return;
     }
     try {
       const fs::path file = jobs_dir / id / "output.m4a";
-      std::cout << "  File path: " << file << std::endl;
-      std::cout << "  Exists: " << fs::exists(file) << std::endl;
-      
       if (!fs::exists(file)) {
-        std::cout << "  File not found\n";
         res.status = 404;
         res.set_content("{\"error\":\"not found\"}", "application/json");
         return;
       }
 
       const auto size = fs::file_size(file);
-      std::cout << "  File size: " << size << std::endl;
-      
       const auto rangeHeader = req.get_header_value("Range");
       
-      std::cout << "  File: " << id << " (" << size << " bytes)\n";
-
       uint64_t start = 0;
       uint64_t end = size - 1;
       bool is_partial = false;
@@ -279,7 +319,6 @@ int main(int argc, char** argv) {
             else end = size - 1;
 
             if (start >= size || end >= size || start > end) {
-              // Instead of failing, reset to full file
               start = 0;
               end = size - 1;
               is_partial = false;
@@ -294,73 +333,49 @@ int main(int argc, char** argv) {
 
       uint64_t chunk_size = end - start + 1;
 
-      // Set headers (VERY IMPORTANT)
       if (is_partial) {
         res.status = 206;
         std::string cr = "bytes " + std::to_string(start) + "-" + std::to_string(end) + "/" + std::to_string(size);
         res.set_header("Content-Range", cr);
         res.set_header("Access-Control-Expose-Headers", "Content-Range, Content-Length, Accept-Ranges");
-        std::cout << "  Serving 206 Range: " << cr << "\n";
       } else {
         res.status = 200;
-        std::cout << "  Serving 200: Full file\n";
       }
 
       res.set_header("Accept-Ranges", "bytes");
 
-      // Stream EXACT bytes with proper seek logic
       res.set_content_provider(
           chunk_size,
           "audio/mp4",
           [start, chunk_size, file](uint64_t offset, uint64_t length, httplib::DataSink &sink) {
-
               std::ifstream ifs(file, std::ios::binary);
               if (!ifs) return false;
 
-              // CRITICAL: Seek to start + offset for proper range streaming
               ifs.seekg(static_cast<std::streamoff>(start + offset));
-              
-              // Check if seek failed
-              if (ifs.fail()) {
-                  std::cout << "  Seek failed for offset " << offset << std::endl;
-                  return false;
-              }
+              if (ifs.fail()) return false;
 
               char buffer[8192];
               uint64_t remaining = length;
-
               while (remaining > 0 && ifs) {
                   size_t read_size = std::min<uint64_t>(sizeof(buffer), remaining);
-                  ifs.read(buffer, read_size);
-                  size_t actual = ifs.gcount();
-
-                  if (actual == 0) {
-                      if (ifs.eof()) {
-                          std::cout << "  EOF reached at offset " << offset << std::endl;
-                          break;
-                      } else if (ifs.fail()) {
-                          std::cout << "  Read failed at offset " << offset << std::endl;
-                          break;
-                      }
-                  }
-
+                  ifs.read(buffer, static_cast<std::streamsize>(read_size));
+                  size_t actual = static_cast<size_t>(ifs.gcount());
+                  if (actual == 0) break;
                   if (!sink.write(buffer, actual)) return false;
                   remaining -= actual;
               }
-
               return true;
           }
       );
-      
     } catch (const std::exception& e) {
-      std::cout << "  Exception: " << e.what() << std::endl;
+      log("  Exception: " + std::string(e.what()));
       res.status = 500;
       res.set_content("{\"error\":\"internal server error\"}", "application/json");
       return;
     }
   });
 
-  svr.Post("/api/convert", [&](const httplib::Request& req, httplib::Response& res) {
+  svr.Post("/api/convert", [jobs_dir, have_ffmpeg](const httplib::Request& req, httplib::Response& res) {
     std::error_code ec;
     if (!have_ffmpeg) {
       res.status = 503;
@@ -393,10 +408,14 @@ int main(int argc, char** argv) {
     }
 
     const fs::path output_path = job_dir / "output.m4a";
-    if (!ffmpeg_to_m4a(input_path, output_path)) {
+    std::string ferr;
+    if (!ffmpeg_to_m4a(input_path, output_path, ferr)) {
+      std::cerr << "ffmpeg error: " << ferr << "\n";
       fs::remove_all(job_dir, ec);
       res.status = 500;
-      res.set_content("{\"error\":\"ffmpeg conversion failed\"}", "application/json");
+      std::ostringstream j;
+      j << "{\"error\":\"ffmpeg conversion failed: " << json_escape(ferr) << "\"}";
+      res.set_content(j.str(), "application/json");
       return;
     }
 
@@ -408,7 +427,7 @@ int main(int argc, char** argv) {
     res.set_content(body.str(), "application/json");
   });
 
-  svr.Post("/api/convert-url", [&](const httplib::Request& req, httplib::Response& res) {
+  svr.Post("/api/convert-url", [jobs_dir, have_ffmpeg, have_ytdlp](const httplib::Request& req, httplib::Response& res) {
     std::error_code ec;
     if (!have_ffmpeg) {
       res.status = 503;
@@ -468,10 +487,14 @@ int main(int argc, char** argv) {
     }
 
     const fs::path output_path = job_dir / "output.m4a";
-    if (!ffmpeg_to_m4a(raw, output_path)) {
+    std::string ferr;
+    if (!ffmpeg_to_m4a(raw, output_path, ferr)) {
+      std::cerr << "ffmpeg error: " << ferr << "\n";
       fs::remove_all(job_dir, ec);
       res.status = 500;
-      res.set_content("{\"error\":\"ffmpeg could not encode audio\"}", "application/json");
+      std::ostringstream j;
+      j << "{\"error\":\"ffmpeg could not encode audio: " << json_escape(ferr) << "\"}";
+      res.set_content(j.str(), "application/json");
       return;
     }
 
